@@ -59,9 +59,11 @@ void pidController(float &yawPrevError, float &rollPrevError, float &pitchPrevEr
   rollPrevError = rollError 
 
   // same for pitch
-  Assume pitchError > 0 means we are moving forward
-  motorCFront=somefactor*pitchError + somefactor*rollError + somefactor*yawError
-  setMotorOutput(motorCFront)
+  pitchError = pitchSet - pitchRead 
+  totalpitchError += pitchError
+  pitchDerivative = pitchError - pitchPrevError
+  pitchCorrection = Kp * pitchError + Ki * totalpitchError + Kd * pitchDerivative
+  pitchPrevError = pitchError 
 }
 
 // MPU get basereadings TODO
@@ -78,6 +80,12 @@ void mpu_getBaseReadings(){
   mpu.setZAccelOffset(zAccelOffset); // 1688 factory default for my test chip
   
 }
+
+void setMotorOutputs(){
+  motorCFront=somefactor*pitchError + somefactor*rollError + somefactor*yawError
+  setMotorOutput(motorCFront)
+}
+
 
 void setup() {
   Serial.begin(38400);
@@ -98,9 +106,11 @@ void loop() {
   {
     
   //2. Map joystick positions to -30 and 30 degrees TODO
-    uint8_t yawReading = map(rxValues.yaw, -127, 126, -30, 30);
-    uint8_t pitchReading = map(rxValues.pitch, -127, 126, -30, 30); 
-    uint8_t rollReading = map(rxValues.roll, -127, 126, -30, 30);
+   uint8_t yawReading = map(rxValues.yaw, -127, 126, -30, 30);
+   uint8_t pitchReading = map(rxValues.pitch, -127, 126, -30, 30); 
+   uint8_t rollReading = map(rxValues.roll, -127, 126, -30, 30);
+
+  
 
     
     analogWrite(led, rxValues.throttle);
