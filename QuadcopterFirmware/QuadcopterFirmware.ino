@@ -194,7 +194,7 @@ void pidController(float * yprCorrection){
   float yprDer[3];
   
   for(int i=0; i<3; i++){
-    yprErr[i]=ypr[i] - yprSet[i]; 
+    yprErr[i]=ypr[i]* 180/M_PI - yprSet[i]; 
     yprDer[i]=yprErr[i]-yprPrevErr[i]; 
     yprTotErr[i]+=yprErr[i]; 
   
