@@ -1,42 +1,52 @@
 #include "I2Cdev.h"
+
 #include "MPU6050_6Axis_MotionApps20.h"
-#include "Controller.h"
 
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
     #include "Wire.h"
 #endif
 
-//THIS IS YOUR TEAM NUMBER
-#define channel 23
-#define PALevel RF24_PA_HIGH
-#define CE A0
-#define CS A1
-// test led (should be pwm)
-#define led 3
-/********************************
- **** Voltage Divider Consts ****
- ********************************/
-#define contBattPin A2
-#define R4 1600
-#define R3 1000
-#define logicVoltage 3.3
 
-// Initialize the radio
-RF24 radio(CE, CS);
-rx_values_t rxValues;
- 
-// Initialize the MPU TODO
 MPU6050 mpu;
 
-// set up controller: pass it radio, channel #, and false since it is not the controller
-Controller controller(&radio, channel, false);
 
-//PID Values // TODO
-float Kd;
-float Ki;
-float Kp; 
+// uncomment "OUTPUT_READABLE_QUATERNION" if you want to see the actual
+// quaternion components in a [w, x, y, z] format (not best for parsing
+// on a remote host such as Processing or something though)
+//#define OUTPUT_READABLE_QUATERNION
 
-// Initialize Variables for readings TODO
+// uncomment "OUTPUT_READABLE_EULER" if you want to see Euler angles
+// (in degrees) calculated from the quaternions coming from the FIFO.
+// Note that Euler angles suffer from gimbal lock (for more info, see
+// http://en.wikipedia.org/wiki/Gimbal_lock)
+//#define OUTPUT_READABLE_EULER
+
+// uncomment "OUTPUT_READABLE_YAWPITCHROLL" if you want to see the yaw/
+// pitch/roll angles (in degrees) calculated from the quaternions coming
+// from the FIFO. Note this also requires gravity vector calculations.
+// Also note that yaw/pitch/roll angles suffer from gimbal lock (for
+// more info, see: http://en.wikipedia.org/wiki/Gimbal_lock)
+#define OUTPUT_READABLE_YAWPITCHROLL
+
+// uncomment "OUTPUT_READABLE_REALACCEL" if you want to see acceleration
+// components with gravity removed. This acceleration reference frame is
+// not compensated for orientation, so +X is always +X according to the
+// sensor, just without the effects of gravity. If you want acceleration
+// compensated for orientation, us OUTPUT_READABLE_WORLDACCEL instead.
+//#define OUTPUT_READABLE_REALACCEL
+
+// uncomment "OUTPUT_READABLE_WORLDACCEL" if you want to see acceleration
+// components with gravity removed and adjusted for the world frame of
+// reference (yaw is relative to initial orientation, since no magnetometer
+// is present in this case). Could be quite handy in some cases.
+//#define OUTPUT_READABLE_WORLDACCEL
+
+// uncomment "OUTPUT_TEAPOT" if you want output that matches the
+// format used for the InvenSense teapot demo
+//#define OUTPUT_TEAPOT
+
+
+
 #define INTERRUPT_PIN 2  // use pin 2 on Arduino Uno & most boards
 #define LED_PIN 13 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
 bool blinkState = false;
@@ -57,9 +67,10 @@ VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measure
 VectorFloat gravity;    // [x, y, z]            gravity vector
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-float yprSet[3];        // [yaw, pitch, roll]   intended yaw/pitch/roll container and gravity vector
-float yprPrevErr[3];    // [yaw, pitch, roll]   previous yaw/pitch/roll error container and gravity vector
-float yprTotErr[3];     // [yaw, pitch, roll]   total yaw/pitch/roll error container and gravity vector
+
+// packet structure for InvenSense teapot demo
+uint8_t teapotPacket[14] = { '$', 0x02, 0,0, 0,0, 0,0, 0,0, 0x00, 0x00, '\r', '\n' };
+
 
 
 // ================================================================
@@ -71,57 +82,13 @@ void dmpDataReady() {
     mpuInterrupt = true;
 }
 
-void setup() {
-  Serial.begin(38400);
-  mpuSetup(); 
-  // initalize the radio
-  controller.init();
-  pinMode(led, OUTPUT);
-}
 
-void loop() {
-  if (!controller.isFunctioning()) {
-    Serial.println("EMERGENCY!! TURN OFF ALL MOTORS AND STOP RUNING CODE");
-    return;
-  }
-  
-  //only print values if new values have been received
-  //controler.receive will return however many values were in the buffer
-  if (controller.receive(&rxValues))
-  {
-    
-   //2. Map joystick positions to -30 and 30 degrees TODO
-   yprSet[0] = map(rxValues.yaw, -127, 126, -30, 30);  //Yaw
-   yprSet[1] = map(rxValues.pitch, -127, 126, -30, 30); //Pitch
-   yprSet[2] = map(rxValues.roll, -127, 126, -30, 30);  //Roll
-   
-   // Read MPU
-   float yprCorrec[3]; 
-   readMpu();
-   pidController(yprCorrec);
-   
-    analogWrite(led, rxValues.throttle);
-    Serial.print(" :\t"); Serial.print(rxValues.throttle);
-    Serial.print("\t"); Serial.print(rxValues.yaw);
-    Serial.print("\t"); Serial.print(rxValues.pitch);
-    Serial.print("\t"); Serial.print(rxValues.roll);
-    Serial.print("\t"); Serial.print(rxValues.flip);
-    Serial.print("\t"); Serial.print(rxValues.highspeed);
-    Serial.print("\t"); Serial.print(rxValues.P);
-    Serial.print("\t"); Serial.print(rxValues.I);
-    Serial.print("\t"); Serial.println(rxValues.D);
-  }
-  updateBattery();
-  
-  // send values for led back to the controller 
-  controller.send(&rxValues);
-}
 
 // ================================================================
 // ===                      INITIAL SETUP                       ===
 // ================================================================
 
-void mpuSetup() {
+void setup() {
     // join I2C bus (I2Cdev library doesn't do this automatically)
     #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
         Wire.begin();
@@ -129,9 +96,18 @@ void mpuSetup() {
     #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
         Fastwire::setup(400, true);
     #endif
-    
+
+    // initialize serial communication
+    // (115200 chosen because it is required for Teapot Demo output, but it's
+    // really up to you depending on your project)
     Serial.begin(115200);
     while (!Serial); // wait for Leonardo enumeration, others continue immediately
+
+    // NOTE: 8MHz or slower host processors, like the Teensy @ 3.3v or Ardunio
+    // Pro Mini running at 3.3v, cannot handle this baud rate reliably due to
+    // the baud timing being too misaligned with processor ticks. You must use
+    // 38400 or slower in these cases, or use some kind of external separate
+    // crystal solution for the UART timer.
 
     // initialize device
     Serial.println(F("Initializing I2C devices..."));
@@ -189,26 +165,28 @@ void mpuSetup() {
     pinMode(LED_PIN, OUTPUT);
 }
 
-void pidController(float * yprCorrection){
-  float yprErr[3];
-  float yprDer[3];
-  
-  for(int i=0; i<3; i++){
-    yprErr[i]=ypr[i] - yprSet[i]; 
-    yprDer[i]=yprErr[i]-yprPrevErr[i]; 
-    yprTotErr[i]+=yprErr[i]; 
-  
-    yprCorrection[i] = Kp * yprErr[i] + Ki * yprTotErr[i] + Kd * yprDer[i];
-    yprPrevErr[i] = yprErr[i];  
-  }
-}
 
-void readMpu()
-{    // if programming failed, don't try to do anything
+
+// ================================================================
+// ===                    MAIN PROGRAM LOOP                     ===
+// ================================================================
+
+void loop() {
+    // if programming failed, don't try to do anything
     if (!dmpReady) return;
 
     // wait for MPU interrupt or extra packet(s) available
     while (!mpuInterrupt && fifoCount < packetSize) {
+        // other program behavior stuff here
+        // .
+        // .
+        // .
+        // if you are really paranoid you can frequently test in between other
+        // stuff to see if mpuInterrupt is true, and if so, "break;" from the
+        // while() loop to immediately process the MPU data
+        // .
+        // .
+        // .
     }
 
     // reset interrupt flag and get INT_STATUS byte
@@ -236,6 +214,32 @@ void readMpu()
         // (this lets us immediately read more without waiting for an interrupt)
         fifoCount -= packetSize;
 
+        #ifdef OUTPUT_READABLE_QUATERNION
+            // display quaternion values in easy matrix form: w x y z
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            Serial.print("quat\t");
+            Serial.print(q.w);
+            Serial.print("\t");
+            Serial.print(q.x);
+            Serial.print("\t");
+            Serial.print(q.y);
+            Serial.print("\t");
+            Serial.println(q.z);
+        #endif
+
+        #ifdef OUTPUT_READABLE_EULER
+            // display Euler angles in degrees
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetEuler(euler, &q);
+            Serial.print("euler\t");
+            Serial.print(euler[0] * 180/M_PI);
+            Serial.print("\t");
+            Serial.print(euler[1] * 180/M_PI);
+            Serial.print("\t");
+            Serial.println(euler[2] * 180/M_PI);
+        #endif
+
+        #ifdef OUTPUT_READABLE_YAWPITCHROLL
             // display Euler angles in degrees
             mpu.dmpGetQuaternion(&q, fifoBuffer);
             mpu.dmpGetGravity(&gravity, &q);
@@ -246,20 +250,55 @@ void readMpu()
             Serial.print(ypr[1] * 180/M_PI);
             Serial.print("\t");
             Serial.println(ypr[2] * 180/M_PI);
-            
+        #endif
+
+        #ifdef OUTPUT_READABLE_REALACCEL
+            // display real acceleration, adjusted to remove gravity
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetAccel(&aa, fifoBuffer);
+            mpu.dmpGetGravity(&gravity, &q);
+            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
+            Serial.print("areal\t");
+            Serial.print(aaReal.x);
+            Serial.print("\t");
+            Serial.print(aaReal.y);
+            Serial.print("\t");
+            Serial.println(aaReal.z);
+        #endif
+
+        #ifdef OUTPUT_READABLE_WORLDACCEL
+            // display initial world-frame acceleration, adjusted to remove gravity
+            // and rotated based on known orientation from quaternion
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetAccel(&aa, fifoBuffer);
+            mpu.dmpGetGravity(&gravity, &q);
+            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
+            mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
+            Serial.print("aworld\t");
+            Serial.print(aaWorld.x);
+            Serial.print("\t");
+            Serial.print(aaWorld.y);
+            Serial.print("\t");
+            Serial.println(aaWorld.z);
+        #endif
+    
+        #ifdef OUTPUT_TEAPOT
+            // display quaternion values in InvenSense Teapot demo format:
+            teapotPacket[2] = fifoBuffer[0];
+            teapotPacket[3] = fifoBuffer[1];
+            teapotPacket[4] = fifoBuffer[4];
+            teapotPacket[5] = fifoBuffer[5];
+            teapotPacket[6] = fifoBuffer[8];
+            teapotPacket[7] = fifoBuffer[9];
+            teapotPacket[8] = fifoBuffer[12];
+            teapotPacket[9] = fifoBuffer[13];
+            Serial.write(teapotPacket, 14);
+            teapotPacket[11]++; // packetCount, loops at 0xFF on purpose
+        #endif
+
         // blink LED to indicate activity
         blinkState = !blinkState;
         digitalWrite(LED_PIN, blinkState);
     }
-  
-  }
-
-void updateBattery() {
-  int batRead = analogRead(contBattPin);
-  //calc bat voltage (mV)
-  unsigned long batVolt = (batRead * logicVoltage * (R3 + R4)) / (R4) * 1000 / 1023;
-  if (batVolt < 7400) {
-    // tell the controller to turn on the led
-    rxValues.auxLED = true;
-  }
 }
+
