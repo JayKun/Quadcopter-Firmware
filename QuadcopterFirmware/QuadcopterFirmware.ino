@@ -91,9 +91,9 @@ void loop() {
   {
     
    //2. Map joystick positions to -30 and 30 degrees TODO
-   yprSet[0] = map(rxValues.yaw, -127, 126, -30, 30);  //Yaw
-   yprSet[1] = map(rxValues.pitch, -127, 126, -30, 30); //Pitch
-   yprSet[2] = map(rxValues.roll, -127, 126, -30, 30);  //Roll
+   yprSet[0] = map(rxValues.yaw, 0, 255, -30, 30);  //Yaw
+   yprSet[1] = map(rxValues.pitch, 0, 255, -30, 30); //Pitch
+   yprSet[2] = map(rxValues.roll, 0, 255, -30, 30);  //Roll
    
    // Read MPU
    float yprCorrec[3]; 
